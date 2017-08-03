@@ -382,7 +382,7 @@ public interface Blake2b {
             }
         }
 
-        protected Engine clone() throws CloneNotSupportedException {
+        public Engine clone() {
             return new Engine(param, buflen, buffer, f, t, last_node, m, v);
         }
 
