@@ -114,12 +114,21 @@ public interface Blake2b {
     void update (byte[] input, int offset, int len) ;
 
     /** */
+    byte[] digestWithoutBufferReset() ;
+
+    /** */
+    byte[] digestWithoutBufferReset(byte[] input) ;
+
+    /** */
+    void digestWithoutBufferReset(byte[] output, int offset, int len) ;
+
+    /** Note: This method resets the digest buffer after calculating the digest */
     byte[] digest () ;
 
-    /** */
+    /** Note: This method resets the digest buffer after calculating the digest */
     byte[] digest (byte[] input) ;
 
-    /** */
+    /** Note: This method resets the digest buffer after calculating the digest */
     void digest (byte[] output, int offset, int len) ;
 
     /** */
@@ -327,7 +336,6 @@ public interface Blake2b {
 
             if ( param.getDepth() > Param.Default.depth ) {
                 final int ndepth = param.getNodeDepth();
-                final long nxoff = param.getNodeOffset();
                 if (ndepth == param.getDepth() - 1) {
                     last_node = true;
                     assert param.getNodeOffset() == 0 : "root must have offset of zero";
@@ -342,6 +350,26 @@ public interface Blake2b {
 
         }
 
+        // for clone support
+        Engine (final Param param, int _buflen, byte[] _buffer, long[] _f, long[] _t, boolean _last_node, long[] _m, long[] _v) {
+            assert param != null : "param is null";
+            this.param = param.clone();
+            this.oneByte = new byte[1];
+            this.outlen = param.getDigestLength();
+            this.last_node = _last_node;
+
+            // set cache
+            this.buffer = new byte [ Spec.block_bytes ];
+            this.buflen = _buflen;
+            System.arraycopy(_buffer, 0, this.buffer, 0, _buffer.length);
+            System.arraycopy(_f, 0, this.f, 0, f.length);
+            System.arraycopy(_t, 0, this.t, 0, t.length);
+            System.arraycopy(_m, 0, this.m, 0, m.length);
+            System.arraycopy(_v, 0, this.v, 0, v.length);
+
+            initialize();
+        }
+
         private void initialize () {
             // state vector h - copy values to address reset() requests
             System.arraycopy( param.initialized_H(), 0, this.h, 0, Spec.state_space_len);
@@ -352,6 +380,10 @@ public interface Blake2b {
             if(param.hasKey){
                 this.update (param.key_bytes, 0, Spec.block_bytes);
             }
+        }
+
+        protected Engine clone() throws CloneNotSupportedException {
+            return new Engine(param, buflen, buffer, f, t, last_node, m, v);
         }
 
         public static void main(String... args) {
@@ -372,6 +404,11 @@ public interface Blake2b {
                 buffer[ i ] = (byte) 0;
             }
 
+            resetWithoutClearBuffer();
+        }
+
+        /** {@inheritDoc} */
+        final public void resetWithoutClearBuffer () {
             // reset flags
             this.f[ 0 ] = 0L;
             this.f[ 1 ] = 0L;
@@ -465,6 +502,38 @@ public interface Blake2b {
         @Override final public byte[] digest (byte[] input) {
             update(input, 0, input.length);
             return digest();
+        }
+
+        /** {@inheritDoc} */
+        @Override final public void digestWithoutBufferReset(byte[] output, int off, int len) {
+            // zero pad last block; set last block flags; and compress
+            System.arraycopy( zeropad, 0, buffer, buflen, Spec.block_bytes - buflen);
+            if(buflen > 0) {
+                this.t[0] += buflen;
+                this.t[1] += this.t[0] == 0 ? 1 : 0;
+            }
+
+            this.f[ flag.last_block ] = 0xFFFFFFFFFFFFFFFFL;
+            this.f[ flag.last_node ] = this.last_node ? 0xFFFFFFFFFFFFFFFFL : 0x0L;
+
+            // compres and write final out (truncated to len) to output
+            compress( buffer, 0 );
+            hashout( output, off, len );
+
+            resetWithoutClearBuffer();
+        }
+
+        /** {@inheritDoc} */
+        @Override final public byte[] digestWithoutBufferReset() throws IllegalArgumentException {
+            final byte[] out = new byte [outlen];
+            digestWithoutBufferReset( out, 0, outlen );
+            return out;
+        }
+
+        /** {@inheritDoc} */
+        @Override final public byte[] digestWithoutBufferReset(byte[] input) {
+            update(input, 0, input.length);
+            return digestWithoutBufferReset();
         }
 
         // ---------------------------------------------------------------------
