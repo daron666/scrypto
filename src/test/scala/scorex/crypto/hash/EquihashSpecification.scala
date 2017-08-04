@@ -74,7 +74,7 @@ class EquihashSpecification extends PropSpec
 
   property("Equihash should solve gbp") {
     forAll(tasksAndSolutions) { (n: Int, k: Int, I: Array[Byte], nonce: BigInt, solutions: Seq[Seq[Int]]) =>
-      val digest = createDigest(n, k, "block header".getBytes, nonce)
+      val digest = createDigest(n, k, I, nonce)
       implicit val ord = new Ordering[Seq[Int]] {
         override def compare(x: Seq[Int], y: Seq[Int]): Int = {
           val (xx, yy) = x.zip(y).find { case (f, s) => f != s }.getOrElse((0, 0))
