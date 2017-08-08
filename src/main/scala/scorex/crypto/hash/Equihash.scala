@@ -1,7 +1,9 @@
 package scorex.crypto.hash
 
-import com.google.common.primitives.Bytes
+import java.math.BigInteger
+
 import org.slf4j.LoggerFactory
+import ove.crypto.digest.Blake2b
 import ove.crypto.digest.Blake2b.{Digest, Engine}
 import scorex.utils.LittleEndianBytes._
 
@@ -18,11 +20,11 @@ object Equihash {
     digest
   }
 
-  def countZeroes(bytes: Array[Byte]): Int = {
+  def countLeadingZeroes(bytes: Array[Byte]): Int = {
     val byteSize = 8
     (0 until byteSize * bytes.size).foldLeft(0) {
       case (res, i) if (bytes(i / byteSize) << i % byteSize & 0x80) == 0 => res + 1
-      case (res, _) => res
+      case (res, _) => return res
     }
   }
 
@@ -105,11 +107,11 @@ object Equihash {
     val solns = ArrayBuffer.empty[Seq[Int]]
 
     for {i <- 0 until X.size - 1} {
-      val xorResult = xor(X(i)._1, X(i+1)._1)
-      if (countZeroes(xorResult) == n && distinctIndices(X(i)._2, X(i+1)._2)) {
+      val xorResult = xor(X(i)._1, X(i + 1)._1)
+      if (countLeadingZeroes(xorResult) == n && distinctIndices(X(i)._2, X(i + 1)._2)) {
         val Xi = X(i)
-        val Xi1 = X(i+1)
-        if (X(i)._2(0) < X(i+1)._2(0)) {
+        val Xi1 = X(i + 1)
+        if (X(i)._2(0) < X(i + 1)._2(0)) {
           solns.append(Xi._2 ++ Xi1._2)
         } else {
           solns.append(Xi1._2 ++ Xi._2)
@@ -119,9 +121,88 @@ object Equihash {
     solns
   }
 
-  // todo def block_hash(prev_hash, nonce, soln):
+  /**
+    * Generate n-bit word at specified index.
+    * @param n Word length in bits
+    * @param digestWithoutIdx digest without index
+    * @param idx word index
+    * @return word
+    */
+  def generateWord(n: Int, digestWithoutIdx: Digest, idx: Int): BigInteger = {
+    val bytesPerWord = n / 8
+    val wordsPerHash = 512 / n
 
-  // todo def print_hash(h)
+    val hidx = idx / wordsPerHash
+    val hrem = idx % wordsPerHash
 
-  // todo def validate_params(n, k)
+    val idxdata = leIntToByteArray(hidx)
+    val ctx1 = digestWithoutIdx.clone()
+    ctx1.update(idxdata)
+    val digest = ctx1.digest()
+
+    (hrem * bytesPerWord until hrem * bytesPerWord + bytesPerWord).foldLeft(BigInteger.ZERO) {
+      case (w, i) => w.shiftLeft(8).or(BigInteger.valueOf((digest(i) & 0xFF).toLong))
+    }
+  }
+
+  /**
+    * Validate an Equihash solution.
+    * @param n Word length in bits
+    * @param k 2-log of number of indices per solution
+    * @param personal Personal bytes for digest
+    * @param header Block header with nonce, 140 bytes
+    * @param solutionIndices Solution indices
+    * @return Return True if solution is valid, False if not.
+    */
+  def validateSolution(n: Int, k: Int, personal: Array[Byte], header: Array[Byte], solutionIndices: Seq[Int]): Boolean = {
+    assert(n > 1)
+    assert(k >= 3)
+    assert(n % 8 == 0)
+    assert(n % (k + 1) == 0)
+
+    val solutionLen = Math.pow(2, k).toInt
+    assert(solutionIndices.size == solutionLen)
+
+    // Check for duplicate indices.
+    if (solutionIndices.toSet.size != solutionIndices.size) {
+      false
+    } else {
+      // Generate hash words.
+      val bytesPerWord = n / 8
+      val wordsPerHash = 512 / n
+      val outlen = wordsPerHash * bytesPerWord
+
+      val digest = Blake2b.Digest.newInstance(new Blake2b.Param().setDigestLength(outlen).setPersonal(personal))
+      digest.update(header)
+
+      val words = ArrayBuffer.empty[BigInteger]
+      for (i <- 0 until solutionLen) {
+        words += generateWord(n, digest, solutionIndices(i))
+      }
+
+      // Check pair-wise ordening of indices.
+      for (s <- 0 until k) {
+        val d = 1 << s
+        for (i <- 0 until solutionLen by 2 * d) {
+          if (solutionIndices(i) >= solutionIndices(i + d))
+            return false
+        }
+      }
+
+      // Check XOR conditions.
+      val bitsPerStage = n / (k + 1)
+      for (s <- 0 until k) {
+        val d = 1 << s
+        for (i <- 0 until solutionLen by 2 * d) {
+          val w = words(i).xor(words(i + d))
+          if (w.shiftRight(n - (s + 1) * bitsPerStage) != BigInteger.ZERO)
+            return false
+          words(i) = w
+        }
+      }
+
+      // Check final sum zero.
+      words(0) == BigInteger.ZERO
+    }
+  }
 }
